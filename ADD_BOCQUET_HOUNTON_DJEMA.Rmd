@@ -1,0 +1,813 @@
+---
+title: "Projet d'Analyse de Données"
+author: "BOCQUET Cécile, HOUNTON Jean-Phillipes, DJEMA Alissa"
+date: "04/06/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+\vspace{280pt}
+
+\tableofcontents
+
+\newpage
+
+# Introduction et motivations
+
+Le financement et le fonctionnement des différents systèmes de santé européens font l'objet d'un débat ardent en ces temps de crise sanitaire. 
+Ce projet vise à utiliser des méthodes d'analyses de données afin de dégager des similitudes et/ou tendances entre ces différents pays. 
+Notre étude a pour objectif d'explorer la richesse d'un certain nombre d'indicateurs afin de savoir si la crise économique de 2008 a impacté durablement la répartition des dépenses de santé des pays européens.
+Pour ce faire, une première étape sera le traitement des données. En effet, la base de données a notre disposition est issue d'Eurostat, l'Office de Statistique de l'Union Européenne et comporte beaucoup de données manquantes. Dans un second temps, nous procéderons à des études univariée et bivariée de nos variables, afin de comprendre au mieux les données que nous possédons. Enfin, nous pourrons appliquer nos méthodes d'analyse non supervisée sur des données complètes et interprétables, afin de tirer des conclusions à notre problématique.  
+
+```{r,include=FALSE,results=FALSE,message=FALSE,warning=FALSE}
+#TOUTES LES BIBLIOTHEQUES ICI
+library(FactoMineR)
+library(factoextra)
+library(ggplot2)
+library(mclust)
+library(Amelia)
+library(corrplot)
+library(RColorBrewer)
+```
+
+# I. Traitement des données
+
+Notre base de données initiale concentre 30 indicateurs de dépenses de santé, pour 32 pays européens sur une période de 25 années allant de 1992 à 2017. Cependant, cette dernière est composée à 53% de valeurs manquantes. Nous devons donc procéder par tâtonnement pour sélectionner les observations et variables possédants le moins de données manquantes.
+Pour commencer, nous faisons donc le choix de concentrer notre étude uniquement à partir de 2007.
+
+```{r,echo=FALSE,fig.width=7,fig.height=3.5,fig.align='center'}
+# Mise a jour de notre BDD
+data<-read.table("./Data-health.txt",header=T)
+missmap(data, main = " ",  y.cex = 0.6,x.cex = 0.6)
+data2<-subset(data,data$TIME>=2007)
+```
+De plus, la présence de valeurs manquantes pour un certain nombre de pays nous a contraint à retirer des pays de notre étude. Pour ce faire, nous sélectionnons sur la nouvelle période considérée les pays ayant au moins 60% d'information présente. Ces derniers sont présentés ci-dessous : 
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+d=rep(0,15);j=1
+k=1
+for(i in seq(0,330,11)){
+datasub<-data2[(1+i):(11+i),]
+if(sum(is.na(datasub))<(dim(datasub)[1]*dim(datasub)[2])*0.4){
+  d[k]<-j
+  k=k+1
+}
+j=j+11
+}
+#dim(data2[d,])[1]
+data2[d,3]
+```
+Ces pays restants sont relativement intéressants dans le sens où ils présentent une diversité. En effet, nous avons aussi bien des pays de l'Est, de l'Ouest, du Nord et du Sud de l'Europe. Ce sont également des pays proposant une diversité au niveau du PIB. On retrouve également la France qui est le pays dont les dépenses de santé en pourcentage du PIB sont les plus élévées en Europe. Mais aussi la Grèce, l'un des pays le plus touché par la crise de 2008.   
+
+Toujours par soucis de données manquantes, on propose de se concentrer sur les 14 pays suivants : **l'Allemagne, l'Autriche, la Belgique, Chypre, l'Espagne, l'Estonie, la Finlande, la France, la Grece, la Hongrie, la Lituanie, les Pays-Bas, le Portugal** et **la Roumanie**. 
+
+Pour finir, nous choissisons de supprimer les variables ayant plus de 35% d'observations manquantes. Ainsi, nous avons réduit à 9% l'information manquante. Ces 9% restants seront remplacés par une régression linéaire par rapport au temps pour chaque pays, si le nombre de valeurs manquantes est inférieur à 4 et si la régression possède un $R^2$ supérieur a 0.7. On procède à une dernière suppression de variables. Enfin on remplacera les dernières NAs par la médiane annuelle des 14 pays. Il faudra donc prendre en considération les remplacements obtenus dans cette section lorsque nous commenterons les résultats obtenus.
+```{r,echo=FALSE,fig.width=7,fig.height=3.5,fig.align='center'}
+#NOUVELLE DATA
+data2<-subset(data2,data2$GEO=="France"|data2$GEO=="Belgique"|data2$GEO=="Allemagne"|data2$GEO=="Pays-Bas"|data2$GEO=="Autriche"|data2$GEO=="Finlande"|data2$GEO=="Grece"|data2$GEO=="Lituanie"|data2$GEO=="Hongrie"|data2$GEO=="Estonie"|data2$GEO=="Chypre"|data2$GEO=="Roumanie"|data2$GEO=="Espagne"|data2$GEO=="Portugal")
+
+#missmap(data2, main = "Missing values vs observed")
+
+y=rep(0,length(data))
+j=1
+for (i in 1:length(data)) { 
+  if (sum(is.na(data2[,i]))<dim(data2)[1]*0.35){
+  j=j+1
+  y[j]=i}}
+
+data<-subset(data2[,y])
+
+missmap(data, main = " ",  y.cex = 0.6,x.cex = 0.6)
+
+#-----------------------------------
+#REMPLACEMENT VALEURS MANQUANTE PAR REGRESSION
+#-----------------------------------
+for(i in seq(0,154,11)){ #Par PAYS
+for (j in 4:25) { #Par VARIABLES
+  if (sum(is.na(data[(1+i):(11+i),j]))<5 & sum(is.na(data[(1+i):(11+i),j]))!=0){ #Moins de 4 valeurs manquantes on fait une régression
+    r<-lm(data[(1+i):(11+i),j]~c(2007:2017))
+    for (k in seq(0,10)){
+       if(is.na(data[1+k+i,j] & summary(r)$r.squared>0.7)){
+         data[1+k+i,j]<-predict(r,newdata=data[(1+i):(11+i),])[1+k]
+         }
+   }
+  }
+ }
+}
+
+#missmap(data, main = "Missing values vs observed",ylab=data$GEO)
+
+#-----------------------------------
+#SUPRESSION DES COLONNES AYANT TROP DE VALEURS MANQUANTES ET REMPLACEMENT DES NA PAR DES MEDIANES
+#-----------------------------------
+j=4
+while (j < length(data)) {
+  if (sum(is.na(data[,j])) > (dim(data)[1])*0.2){data <- data[,-j]}
+  j = j+1
+}
+
+for (k in unique(data$TIME)){
+  a <- subset(data,data$TIME == k)
+  for (j in 4:length(data)) {
+  for (i in 1:length(data[,1])) {
+    if (is.na(data[i,j]) == TRUE & data[i,]$TIME == k) {data[i,j] <-median(na.omit(a[,j]))
+}}}}
+#summary(data)
+```
+
+Nous possédons à présent une base de données complète. Dans la section suivante nous pourrons présenter les données que nous avons conservé et étudier le comportement indivuel de chaque variable. 
+
+```{r,echo=FALSE}
+#PAR PAYS
+dataFra<-subset(data, data$GEO=="France") 
+dataBel<-subset(data, data$GEO=="Belgique") 
+dataAll<-subset(data, data$GEO=="Allemagne") 
+dataAut<-subset(data, data$GEO=="Autriche") 
+dataPB<-subset(data, data$GEO=="Pays-Bas") 
+dataGre<-subset(data, data$GEO=="Grece") 
+dataChy<-subset(data, data$GEO=="Chypre") 
+dataRou<-subset(data, data$GEO=="Roumanie")
+dataEst<-subset(data, data$GEO=="Estonie")
+dataHon<-subset(data, data$GEO=="Hongrie")
+dataLit<-subset(data, data$GEO=="Lituanie")
+dataEsp<-subset(data, data$GEO=="Espagne") 
+dataPor<-subset(data, data$GEO=="Portugal") 
+dataFin<-subset(data, data$GEO=="Finlande") 
+
+#PAR ANNEE 
+data2007<-subset(data, data$TIME==2007)
+rownames(data2007) = data2007$GEO
+data2009<-subset(data, data$TIME==2009)
+rownames(data2009) = data2009$GEO
+data2010<-subset(data, data$TIME==2010)
+rownames(data2010) = data2009$GEO
+data2012<-subset(data, data$TIME==2012)
+rownames(data2012) = data2009$GEO
+data2015<-subset(data, data$TIME==2015)
+rownames(data2015) = data2009$GEO
+data2017<-subset(data, data$TIME==2017)
+rownames(data2017) = data2017$GEO
+```
+
+
+# II. Études des variables
+
+Notons que nous avons réalisé des études univariée et bivariée avant la suppression et le traitement de données. Cependant, elles ne sont pas essentielles pour le lecteur, c'est la raison pour laquelle nous présenterons ci-dessous seulement une partie de cette analyse sur les variables que nous conservons.  
+
+##1. Analyses Univariées
+
+Pour avoir un regard d'ensemble sur nos données, nous avons choisi d'observer l'évolution de 2007 à 2017 de la médiane ainsi que de la moyenne des 14 pays considérés.
+
+Tout d'abord la variable V1, représente les dépenses de santé courante en euro par habitant. La moyenne de cet indicateur a une tendance haussière sur les 10 années. Cependant, la médiane révèle une forte chute à partir de 2009, indiquant ainsi que la hausse de la moyenne est portée principalement par certains pays. 
+
+Il en est de même, pour la variable V2 qui porte sur les dépenses en euros par habitant en soins curatifs. 
+
+Les variables V3 à V6 portent toutes également sur les soins curatifs, respectivement (en milieu hospitalier, en hospitalisation de jour, ambulatoires, et à domicile). Ces dernières ont des tendances à la hausse aussi bien pour la médiane que pourla moyenne.
+
+De même, pour les variables V7 à V11 qui portent sur les dépenses en soins de longue durée en euro par habitant. (V10 en ambulatoire, V11 à domicile)
+
+La variable V14 représente les dépenses de médicaments sans ordonnance. On remarque une baisse considérable à partir de 2009 pour la médiane, et une baisse plus faible pour la moyenne.
+V15 quant à elle porte sur les soins préventifs, et une baisse de la médiane des 14 pays est également constatée.
+Les dépenses de gouvernance et d'administration des systèmes de santé sont représentées par V16, dont la moyenne présente une tendance à la hausse alors que la médiane baisse fortement à partir de 2009.
+Le nombre de praticiens en médecine générale et de praticien en médecine généralisée par 100 000 habitants sont représentés respectivement par V17 et V18. Leur médiane et moyenne ont des tendances haussières sur la période considérée.
+
+De même, pour V22 qui est le nombre de personnels infirmiers par 100 000 habitants, même si on enregistre une forte baisse à partir de 2011 pour la médiane.
+
+Les quatre dernières variables que nous observons informent sur le nombre de lits d'hôpital par 100 000 habitants. On remarque que ces postes de dépenses se réduisent considérablement au cours des années.
+
+```{r,echo=FALSE,results=FALSE,fig.width=7,fig.height=2}
+#ON PEUT SELECTIONNER SEULEMENT QUELQUES VARIABLES !?
+#J'ai mis les histogrammes en commentaire et boxplot psq je pense qu'on peut s'en passer
+par(mfrow=c(1,3))
+# Evolution de la moyenne et médiane Européenne sur 10 années
+x=rep(0,11)
+y=rep(0,11)
+for(i in 4:length(data)){
+for(j in 1:11){
+  x[j]<-mean(subset(data[,i], data$TIME==2006+j))
+  y[j]<-median(subset(data[,i], data$TIME==2006+j))
+}
+ # hist(x ,main=names(data[i]),col="#99CCCC" ,sub="Histogramme de la moyenne Européenne (2007-2017)",col.main="darkblue", col.sub="darkblue",cex.sub = 0.75)
+#boxplot(x, main=names(data[i]), col="#FFFFFF",border="#3399CC",sub="Moyenne Européenne (sur la période 2007-2017)",col.main="darkblue", col.sub="darkblue",cex.sub = 0.75)
+  plot((2007:2017),x ,main=names(data[i]),ylim=c(min(y,x),max(y,x)), ylab=" ", xlab=" ",type="l", col="darkblue", col.main="darkblue",cex.main=0.8,cex.axis=0.8)
+  points((2007:2017),y,col="darkcyan",type="l")
+  abline(v=2009,col="salmon",lty=2)
+  abline(v=2011,col="salmon",lty=2)
+  legend("top",legend = c("Moyenne", "Médiane"), 
+  col = c("darkblue","darkcyan"), 
+  bty = "n", lty=1,cex = 0.6, text.col = "black", horiz = T )
+}
+```
+
+Cette vision d'ensemble étant faite, nous décidons de nous attarder plus en détail sur trois variables, afin de voir l'évolution de chacun des pays dans ces postes de dépense.
+
+```{r,echo=FALSE,fig.width=9.5,fig.height=4}
+par(mfrow=c(1,2))
+for(i in c(4,15,19)){
+for(j in 1:11){
+  y[j]<-median(na.omit(subset(data[,i], data$TIME==2006+j)))
+}
+plot((2007:2017),dataAll[,i],pch=20,ylab="",xlab="",type="l",col="cornflowerblue",ylim=c(min(data[,i]),max(data[,i])),xlim=c(2007,2017),cex.axis=0.6,cex.main=0.8,main=names(data[i]))
+abline(v=2009,col="#CC9999", lty=3)
+abline(v=2011,col="#CC9999", lty=3)
+points((2007:2017),dataFra[,i],pch=20,type="l",col="darkcyan")
+points((2007:2017),dataPB[,i],pch=20,type="l",col="#99CCFF")
+
+points((2007:2017),dataEsp[,i],pch=20,type="l",col="#9999FF")
+
+points((2007:2017),dataGre[,i],pch=20,type="l",col="#66CCCC")
+points((2007:2017),dataLit[,i],pch=20,type="l",col="burlywood3")
+points((2007:2017),dataRou[,i],pch=20,type="l",col="#CC6699")
+
+points((2007:2017),y,pch=20,type="l",lty=1,lwd=1.5,col="red")
+
+legend("topleft",legend = c("Allemagne", "France","Pays-bas","Espagne","Grèce","Lituanie","Roumanie","Médiane européenne"), 
+  col = c("cornflowerblue","darkcyan","#99CCFF","#9999FF","#66CCCC","burlywood3","#CC6699","red"), 
+  bty = "n", lty=1,cex = 0.5, text.col = "black", horiz = F )
+
+
+plot((2007:2017),dataFin[,i],pch=20,ylab="",xlab="",type="l",col="cornflowerblue",ylim=c(min(data[,i]),max(data[,i])),xlim=c(2007,2017),cex.axis=0.6,cex.main=0.8,main=names(data[i]))
+abline(v=2009,col="#CC9999", lty=3)
+abline(v=2011,col="#CC9999", lty=3)
+points((2007:2017),dataBel[,i],pch=20,type="l",col="darkcyan")
+points((2007:2017),dataAut[,i],pch=20,type="l",col="#99CCFF")
+
+points((2007:2017),dataPor[,i],pch=20,type="l",col="#9999FF")
+
+points((2007:2017),dataHon[,i],pch=20,type="l",col="#66CCCC")
+points((2007:2017),dataEst[,i],pch=20,type="l",col="burlywood3")
+points((2007:2017),dataChy[,i],pch=20,type="l",col="#CC6699")
+
+points((2007:2017),y,pch=20,type="l",lty=1,lwd=1.5,col="red")
+
+legend("topleft",legend = c("Finlande", "Belgique","Autriche","Portugale","Hongrie","Estonie","Chypre","Médiane européenne"), 
+  col = c("cornflowerblue","darkcyan","#99CCFF","#9999FF","#66CCCC","burlywood3","#CC6699","red"), 
+  bty = "n", lty=1,cex = 0.5, text.col = "black", horiz = F )
+
+}
+```
+
+Premièrement pour la variable de dépense courante (V1) où la médiane chutait à partir de 2009, on remarque que cette baisse a été induite principalement par la Grèce et Chypre mais aussi par l'Estonie et le Portugal dans une moindre mesure. Nous pouvons supposer que cette baisse est due à la crise de 2008 car ce sont des pays qui ont été assez impactés. Pour les 10 autres pays la variable V1 présente une certaine constance, voir une légère hausse. 
+
+Pour la variable V16, nous avons les mêmes conclusions. La baisse est portée par ces mêmes pays.
+
+Pour finir nous souhaitions analyser la baisse de la moyenne et la médiane de V27. On remarque une baisse très marquée pour la Finlande, dont le nombre de lits a baissé de plus de 50% sur la période considérée. Cette baisse peut surprendre car pour les indicateurs la Finlande fait partie des pays dont les dépenses sont élevées est ont tendance à augmenter. Cependant, on sait notamment que depuis les années 2000 la Finlande a débuté des changements dans ses politiques de dépenses de santé, principalement en réduisant le nombre de lits d'hôpitaux. Néanmoins, la baisse est également portée par la Grèce, les Pays-Bas,la France, la Belgique, et Chypre.
+
+```{r,echo=FALSE,include=FALSE}
+par(mfrow=c(1,1))
+D = matrix(c(data2007$V1,data2012$V1,data2017$V1),nc=length(data2007[,1]), nr=3, byrow=T) #30 colonnes, 3 lignes
+colnames(D) = data2017$GEO #on nomme les colonnes de la matrice D
+#D<-t(na.omit(t(D))) #suppression des valeurs manquantes dans la matrice D
+barplot(D,beside=T,cex.axis = 0.6, cex.names=0.4, col=c("#33CC99","#99CCCC", "#339999"),main="Dépenses de santé courante")
+legend("topright", legend = c("2007","2012", "2017"), fill = c("#33CC99","#99CCCC", "#339999"),cex=0.6)
+```
+
+```{r,echo=FALSE,include=FALSE}
+par(mfrow=c(1,1))
+D = matrix(c(data2007$V16,data2012$V16,data2017$V16),nc=length(data2007[,1]), nr=3, byrow=T) #30 colonnes, 3 lignes
+colnames(D) = data2017$GEO #on nomme les colonnes de la matrice D
+#D<-t(na.omit(t(D))) #suppression des valeurs manquantes dans la matrice D
+barplot(D,beside=T,cex.axis = 0.6, cex.names=0.4, col=c("#33CC99","#99CCCC", "#339999"),main="Gouvernance et administration des systèmes de santé")
+legend("topright", legend = c("2007","2012", "2017"), fill = c("#33CC99","#99CCCC", "#339999"),cex=0.6)
+```
+
+##2. Analyse Bivariée
+
+Ici, nous étudierons les liens qui peuvent exister entre les différentes variables de notre modèle afin de savoir celles qui interagissent le plus entre-elles. En effet, une forte corrélation (au sens absolue) entre deux variables pourrait expliquer un lien entre celles-ci dans certains cas. La matrice de corrélation ci-dessous prend en compte toutes les variables sauf ID, TIME et GEO.
+
+```{r,echo=FALSE,fig.width=5,fig.height=3.5,fig.align='center'}
+par(mfrow=c(1,1))
+correlation<-round(cor(data[,-c(1:3)]),3) #on retire id 
+#install.packages("corrplot")
+library(corrplot)
+corrplot(correlation,method="color",type="upper",addCoef.col ="black",tl.cex=0.6,number.cex=0.4, tl.col="black", diag=FALSE)
+#clPairs(data2017[,-c(1:3)]) #Ouvrir en grand
+```
+
+Cette matrice de corrélation permet d'affirmer qu'il n'existe pas ou peu de corrélation entre **V27**, **V28**, **V29**, **V30** et toutes les autres variables du modèle. Il s'agit des variables indiquant le nombre de lits d'hopitaux, et nous avons vu précédement que leur variation au cours du temps était atypique. Néamoins elles ne seront pas automatiquement supprimées de notre étude car présentant un aspect particulier.
+À l'inverse, les variables **V1, V2, V3, V4, V5, V6, V7, V10, V11, V14, V15, V16, V17** et **V22** dans une moindre mesure sont très fortement corrélées entre elles 
+
+# III. Analyse exploratoire
+
+
+##1. Classification Hierarchique sur l'ACP – (Ensemble des individus)
+
+
+###a. Analyse en composante principale
+
+```{r,echo=FALSE,include=FALSE}
+rownames(data)<-data$ID
+data <- data[order(data$TIME),]
+Regions <-  c("Nord-Ouest","Nord-Ouest","Nord-Ouest","Sud-Est","Sud-Ouest","Nord-Est","Nord-Est","Nord-Ouest","Sud-Est","Sud-Est","Nord-Est","Nord-Ouest","Sud-Ouest","Sud-Est")
+data<-cbind(data,Regions)
+data.pca <- PCA(data[,c(4:22)],scale.unit = T,ncp=3)
+```
+
+Nous réalisons une première ACP sur nos données après normalisation. Nous décidons de superposer les individus au cercle de corrélations, par soucis de concision. On fait également apparaître les régions Nord, Sud, Ouest, Est, afin de faire apparaître de potentielles similitudes.
+
+Avant de pouvoir interpréter des résultats de cette ACP, une première étape est de définir les dimensions que nous allons conserver.
+
+```{r,echo=FALSE,fig.width=7,fig.height=3.5}
+fviz_pca_biplot(data.pca, axes=c(1,2),
+                # Individus
+                geom.ind = "point",
+                fill.ind = data$Regions, col.ind ="" ,
+                pointshape = 21, pointsize = 1,
+                palette = brewer.pal(n=4, name = "Pastel2"),
+                addEllipses = TRUE,title = "",
+                # Variables
+               col.var ="contrib" , 
+                gradient.cols =  brewer.pal(n=4, name = "Greys"),
+                
+                legend.title = list(fill = "Régions", color = "Contrib"))
+
+```
+
+***Choix des dimensions***
+
+On affiche le graphique du pourcentage cumulé de variance expliquée en fonction du nombre de dimensions de l'ACP.
+
+```{r,echo=FALSE,fig.width=5,fig.height=3.5,fig.align="center"}
+#-------------------------------------
+#Pour commenter les résultats de l'ACP sur la DATA entière
+#-------------------------------------
+plot(1:19,data.pca$eig[,3],col="#99CCCC",type="b",pch=19,ylab="% de variance expliquée",xlab="Nombre de dimensions",col.axis="darkblue",cex.lab=0.7,cex.axis=0.6,col.lab="darkblue") 
+  abline(h=85,col="salmon",lty=2)
+  abline(h=70,col="salmon",lty=2)
+points(3, data.pca$eig[3,3], col= "#339999", cex = 2, lwd = 1.5)
+```
+
+Nous constatons que les deux premières dimensions contiennent environ 63% de la dispersion des données. Comme cela est relativement peu et qu'il est compliqué d'analyser nos résultats  au delà de 3 dimensions, nous décidons de garder les trois premières, qui expliquent environ 73% de la variance. 
+
+Regardons maintenant la contribution des variables et des observations aux axes ainsi que leur cosinus carré. En effet, il est très important de passer par cette étape pour savoir ce que réprésentent les axes, et une observation mal projetée dans le plan (c'est-à-dire avec un cosinus carré faible) ne sera pas interprétable.
+
+On passe donc de l'étude de 20 variables à celle de 3 composantes principales.
+
+***Commentaires des résultats***
+
+On constate que les variables contribuant le plus à la dimension 1 sont **V1**, **V2**, **V4**, **V6**, **V7**, **V14**, **V15**, **V16**. En effet, leur contibution sont toutes supérieure à 8%. De plus, sur le graphique de l'ACP, on remarque également que la première composante principale est corrélée  positivement avec toutes ces variables, et ces corrélations sont assez proches de 1. Cet axe est donc déterminé par les dépenses en médicaments, en gouvernance et administration des systèmes de santé, en soins curatifs et en santé courante. Cela sinifie que les observations ayant une forte coordonée sur cet axe sont les observations ayant le plus dépensé dans ces domaines là. 
+
+Celles contribuant le plus à la dimension 2 sont **V3**, **V27**, **V28**, **V30**. Celles-ci sont corrélées positivement avec cette deuxième composante principale, exceptée **V3**. Ainsi, nous en déduisons que sur cet axe, les lits d'hôpitaux disponibles et les dépenses en soins curatifs en milieu hospitaliers sont opposés.
+
+Enfin, celles contribuant le plus à la dimension 3 sont **V18**, **V22**, respectivement à 20% et 18%. 
+
+```{r,echo=FALSE} 
+#-------------------------------------
+#Pour commenter les résultats de l'ACP sur la DATA entière
+#-------------------------------------
+round(data.pca$var$contrib,2)
+```
+
+En ce qui concerne les individus, il est souhaitable que les individus contribuent de manière  équivalente à l’inertie de chaque axe. Une contribution excessive est une source d’instabilité  des résultats. Dans notre cas, les contributions de chaque individu sont relativement proches. Voici tout de même ci-dessous les données qui contribuent le plus à chaque axe.
+
+```{r,echo=FALSE} 
+k=1;list=rep(0,2);
+print("Contribution DIM 1")
+for (i in 1:154){
+  if (round(data.pca$ind$contrib,2)[i,1]>1.7){
+    list[k]<-rownames(data[i,])
+    k=k+1
+  }
+  }
+list
+k=1;list=rep(0,2);
+print("Contribution DIM 2")
+for (i in 1:154){
+  if (round(data.pca$ind$contrib,2)[i,2]>1.7){
+    list[k]<-rownames(data[i,])
+    k=k+1
+  }
+}
+list
+k=1;list=rep(0,2);
+print("Contribution DIM 3")
+for (i in 1:154){
+  if (round(data.pca$ind$contrib,2)[i,3]>1.7){
+    list[k]<-rownames(data[i,])
+    k=k+1
+  }
+  }
+list
+```
+
+Le pourcentage d’inertie expliquée est un critère global et il est le plus souvent complété par un critère local, défini pour chaque individu. Ainsi, il est essentiel d'étudier la qualité de représentation des individus.
+Si le cosinus d'un individu est grand, en valeur absolue, alors on peut examiner sa position par rapport à un autre individu.
+Nous calculons la somme des cosinus carré sur les 3 premières dimensions. On remarque que pour la quasi totalité des observations le $cos^2$ est élevé. Nous faisons afficher ci-dessous la liste de ceux dont la somme des $cos^2$ est supérieure à 0.75.
+
+```{r,echo=FALSE}
+#-------------------------------------
+#Pour commenter les résultats de l'ACP sur la DATA entière
+#-------------------------------------
+#round(data.pca$ind$cos2,2) 
+k=1;list=rep(0,2);
+print("somme des cos2 des observations sur les 3 dimensions")
+for (i in 1:154){
+  if (round(data.pca$ind$cos2,2)[i,1] + round(data.pca$ind$cos2,2)[i,2] + round(data.pca$ind$cos2,2)[i,3] > 0.75){
+    list[k]<-rownames(data[i,])
+    k=k+1
+  }
+  }
+list
+
+round(data.pca$var$cos2,2) 
+```
+
+Les pays tels que l'**Allemagne**, la **Roumanie**, l'**Autriche**, l'**Espagne**, l'**Estonie**, la **Hongrie** et la **Lituanie** ont un bon $cos^2$ sur toutes les années, ils sont donc bien représentés dans le plan, nous pourrons donc facilement interpréter leur proximité sur le plan.
+Les pays tels que les **Pays-Bas** (de 2008 à 2017), la **Grèce** (de 2009 à 2016), la **Belgique** (de 2012 à 2017) et **Chypre** (de 2013 à 2017) ont un bon cosinus carré sur certaines années, nous pourrons donc également facilement interpréter leur résultats sur ces années là. 
+En revanche, les pays comme la **Finlande**, la **France** et le **Portugal** ont un $cos^2$ plutot faible pour toutes les années, il nous sera alors difficile d'interpréter leurs résultats, nous devrons le faire avec précaution.  
+
+En ce qui concerne les variables, celles ayant un $cos^2$ supérieur à 0,65 sont **V1**, **V2**, **V3**, **V4**, **V6**, **V7**, **V10**, **V14**, **V15**, **V16**, **V27**, **V28** et **V30**. En revanche, la somme des $cos^2$ de **V5**, **V17** et **V29** est relativement faible. Nous devrons faire attention lors de l'interprétation de ces dernières variables, car elles sont mal projetées dans le plan. 
+
+
+**Interprétation**:
+Les premiers résultats que nous pouvons apporter suite à cette ACP sont les suivants. Premièrement, les pays du Nord-Ouest de l'Europe étant reprensantés à l'extrême droite du premier plan factoriel, ils sont donc caractérisés par des dépenses importantes en gouvernance et administration des systèmes de santé, en soins curatifs et dépenses de santé courante. Alors que les pays du Sud-Est et Sud-Ouest présentent des dépenses plus faibles dans ces secteurs, puisqu'ils sont plutôt à gauche. Pour les pays du Nord-Est on constate une certaine hétérogéneité sur ces mêmes indicateurs.
+Les pays du Sud-Ouest semblent se caractériser par des dépenses plus importantes en soins curatifs en milieu hospitaliers. Parmi les pays du Nord-Ouest l'Allemagne investit plus que les autres dans les lits d'hôpitaux et notamment de 2017 elle privilégie les postes de dépenses  en gouvernance et administration des systèmes de santé, en soins curatifs, lits d'hopitaux et dépenses de santé courante, il est en de même pour les Pays-Bas.
+À l'inverse des pays comme la Roumanie et la Grèce ont priviligié le nombre de practiciens en médecine généralisée et le nombre de personnels infirmiers. (On pourrait afficher l'ACP sur la dimension 3 pour mieux voir)
+
+Les régions ne permettent pas de définir des groupes de dépenses précis, car on constate des hétérogéneités dans la manière de dépenser au sein des régions. On propose ainsi de réaliser un clustering hiérarchique sur les résultats de notre ACP pour remarquer des groupes de pays sur les 10 années considérées.
+
+
+###b. Clustering Hiérarchique
+
+```{r,echo=FALSE}
+library(factoextra)
+data.pca.hcpc <- HCPC(data.pca, nb.clust=0,graph = F,metric = "euclidean",method = "ward")
+```
+
+***Détection du nombre de cluster - Étude de l'inertie***
+
+La classification hierarchique étant une méthode instable, une première étape est de déterminer le nombres de cluster. Pour se faire, on étudit la perte d'inertie inter-classes, et le gain d'inertie intra-classe. Ces informations sont également apporté par la hauteur des branches du dendrogramme qui représentent la perte d’inertie inter-classe (ou le gain d’inertie intra). Seulement pour rendre la lecture plus facile nous affichons les graphiques suivants.
+Chaque fois que l'on augmente le nombre de cluster on pert de l'inertie inter-class et on gagne de l'inertie-intra. L'objectif est de trouver le meilleur compromis. Sur l'histogramme on repère que le saut qui permet de passer de 4 à 5 clusters apporte un gain d'inertie trop assez faible. On choisit donc de ne pas aller au delà de 4 clusters.
+De même, le graphique présente le ratio des inerties intra-groupe (le premier point environ 0.72 est le ratio du gain d'inertie de 3 clusters sur celui de 2 clusters). Il s'agit d'un critère à minimiser qui confirmer que nous devons identifier 4 clusters.
+
+```{r,echo=FALSE,results=FALSE,fig.width=8,fig.height=3}
+par(mfrow=c(1,2))
+
+plot.HCPC(data.pca.hcpc, choice = "bar")
+
+plot(c(3:10),data.pca.hcpc$call$t$quot,col="#99CCCC",type="b",pch=19,ylab="Ratio des intertie intra groupe",xlab="Nombre de clusters",col.axis="darkblue",col.lab="darkblue")
+points(4,data.pca.hcpc$call$t$quot[2], col= "#339999", cex = 2, lwd = 1.5)
+```
+
+***Résultats***
+
+Nous pouvons à present afficher le dendrogramme de notre clustering qui sera couper de manière à définir 4 clusters, ainsi que le graphique de nos clusters.
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE,fig.width=6.5,fig.height=3,fig.align="center"}
+#Dendrogramme
+fviz_dend(data.pca.hcpc, cex = 0.7,palette = brewer.pal(n=4, name = "Pastel2"),  rect = TRUE, rect_fill = TRUE,  rect_border = brewer.pal(n=4, name = "Pastel2"),
+          labels_track_height = 0.8 )
+
+#Plot des clusters
+fviz_cluster(data.pca.hcpc, geom = "point", show.clust.cent = TRUE, palette = brewer.pal(n=5, name = "Pastel2"),ggtheme = theme_minimal(),main = "Factor map")
+
+```
+
+Nous pouvons à présent mettre en avant les caractéristiques de nos clusters, afin de déterminer quels individus les composent et à quels postes de dépense les associes-t-on.
+
+```{r,echo=FALSE}
+#-------------------------------------
+#Pour commenter les résultats du clustering sur l'acp de la data entière
+#-------------------------------------
+
+#data.pca.hcpc$desc.var$quanti
+data.pca.hcpc$desc.axes$quanti
+#Cluster 1 VERT
+#Cluster 2 ORANGE ses individu ont des coordonnées élevées sur la DIM 1,2,3
+#Cluster 3 BLEU
+#CLuster 4 ROSE
+```
+
+Pour le cluster 1, la moyenne de la dimension 1 est plus basse que la moyenne pour l'ensemble des observations, et inversement pour les dimensions 2 et 3, mais le plus grand écart correspond à celui pour la dimension 1. Donc, vu les résultats obtenus lors de l'ACP, on peut dire que les pays dans ce cluster dépensent moins que les pays des autres clusters en matière de médicaments, gouvernance et administration des systèmes de santé, soins curatifs et de santé courante, et dépensent plutôt en lits d'hôpitaux.
+
+Pour le cluster 2, les moyennes des trois dimensions pour ce cluster sont plus faibles que les moyennes de ces trois dimensions pour l'ensemble des observations. Donc, vu les résultats obtenus lors de l'ACP, on peut dire que les observations dans ce cluster dépensent moins que les observations des autres clusters (mais plus que ceux du cluster 1) en matière de médicaments, gouvernance et administration des systèmes de santé et de santé courante, et dépensent plutôt en terme de soins curatifs en milieu hospitalier.
+
+Pour le cluster 3, la moyenne des dimensions 1 et 2 pour les observations de ce cluster sont plus élevées que les moyennes pour toutes les observations (et l'écart est assez conséquent pour la dimension 1). En revanche, c'est l'inverse pour la dimension 3. Par rappor aux résultats obtenus lors de l'ACP, les dépenses pour les observations de ce cluster portent plutôt sur les médicaments, la gouvernance et administration des systèmes de santé, les soins curatifs, les lits en hôpitaux et sur la santé courante.
+
+Pour le cluster 4, les moyennes des dimensions 1 et 3 sont plus élevées pour ce cluster que pour l'ensemble des observations, surtout pour la première dimension, et c'est l'inverse pour la dimension 2.A la vue les résultats obtenus lors de l'ACP, les dépenses pour les observations du cluster 4 sont portent plutôt sur les médicaments, la gouvernance et administration des systèmes de santé, les soins curatifs et sur la santé courante.
+
+```{r,echo=FALSE}
+#les plus proches du centre du cluster 
+data.pca.hcpc$desc.ind$para
+```
+
+On constate que le cluster 1 est surtout représenté par la Hongrie qui le plus proche du centre du cluster. Pour le cluster 2 Chypre est le pays le mieux représenté. L'Autriche est le pays le plus proche du centre du cluster 3. Et enfin, le cluster 4 est surtout représenté par les Pays-Bas, la Finlande en 2012 et la France en 2016.
+
+***Conclusions***
+
+Comme nous l'avons déduit lors de l'ACP, les régions ne permettent pas de définir des groupes de comportement. Comme on voit ci-dessous le cluster 1 possède à la fois des pays du Nord-Est et du Sud-Est. Les pays qui le composent sont la **Roumanie**, la **Lituanie**, la **Hongrie**, et l'**Estonie** (seulement jusqu'en 2013). Ces pays sont donc caractérisé par des dépenses qui sont en moyenne plus faible que les autres pays en matière de médicaments, gouvernance et administration des systèmes de santé, soins curatifs et de santé courante. À l'inverse, en moyenne ils possèdent plus de lits d'hôpitaux.
+
+Le cluster 2 possède autant de pays du Sud-Est que de pays du Sud-Ouest, et un pays du Noed-Est. Les pays qui le composent sont l'**Espagne**, la **Grèce**, **Chypre**, le **Portugal** et l'**Estonie** (à partir de 2014). Ces derniers dépensent en moyenne moins que les observations des autres clusters (mais plus que ceux du cluster 1) en matière de médicaments, gouvernance et administration des systèmes de santé et de santé courante. Cependant, en terme de soins curatifs en milieu hospitalier leur depense sont plus élevées.
+
+Le cluster 3 est composé uniquement de pays du Nors-Ouest, qui sont : l'**Allemagne**, l'**Autriche** et la **Belgique**. Ces derniers sont caratérisés par des dépenses importantes dans les médicaments, la gouvernance et administration des systèmes de santé, les soins curatifs, les lits en hôpitaux et sur la santé courante.
+
+Et enfin le cluster 4 est composé de la **Finlande**, la **France** et la **Pays-Bas**. Dont les dépenses sont en moyenne plus élevés pour les médicaments, la gouvernance et administration des systèmes de santé, les soins curatifs et sur la santé courante.
+```{r,echo=FALSE}
+table(data$Regions,data.pca.hcpc$data.clust[,20])
+#subset(data$GEO,data$ID==rownames(data.pca.hcpc$data.clust)[1:14])
+```
+
+Suite à cette étude sur la totalité de notre base de données, nous nous rendons compte qu'il existe des différences notables en termes de dépenses par les pays au cours du temps. Nous décidons donc d'effectuer une analyse sur les dépenses médianes européennes aucours de la période 2007-2017
+
+##1. Classification Hierarchique sur l'ACP – (Temporalité)
+
+
+###a. Analyse en composante principale
+
+```{r,echo=FALSE,include=FALSE}
+europe=matrix(0,11,18)
+k=0
+for(i in 4:21){
+  k=k+1
+for(j in 1:11){
+  europe[j,k]<-median(subset(data[,i], data$TIME==2006+j))
+}}
+rownames(europe) = dataFra$TIME
+
+europe.pca <- PCA(europe, ncp=3,scale.unit = T)
+```
+
+```{r,echo=FALSE,fig.width=7,fig.height=3.5}
+fviz_pca_biplot(europe.pca, repel = TRUE,
+                col.ind = "#99CCCC", # Couleur des variables
+                col.var = "contrib",  # Couleur des individues
+                gradient.cols =  brewer.pal(n=4, name = "Purples"),
+                 legend.title = list( color = "Contrib"),title="")
+```  
+
+***Choix des dimensions***
+
+```{r,echo=FALSE,fig.width=5,fig.height=3.5,fig.align="center"}
+#-------------------------------------
+#Pour commenter les résultats de l'ACP sur la DATA entière
+#-------------------------------------
+plot(1:10,europe.pca$eig[,3],col="#99CCCC",type="b",pch=19,ylab="% de variance expliquée",xlab="Nombre de dimension", cex.lab=0.7,cex.axis=0.6, col.axis="darkblue", col.lab="darkblue") 
+  abline(h=95,col="salmon",lty=2)
+  abline(h=85,col="salmon",lty=2)
+points(2, europe.pca$eig[2,3], col= "#339999", cex = 2, lwd = 1.5)
+```
+
+On constate que la première composante principale contient 67,3% de la dispersion des données, et la deuxième composante principale en contient 20%. Ainsi, Les deux premières composantes principales expliquent 87,3% de la dispersion totale, ce qui est suffisant pour ne pas altérer la qualité de représentation des données. Nous décidons donc de garder les deux premières composantes principales.
+
+Comme expliqué précédemment pour l'ACP sur l'ensemble des données, il est essentiel d'étudier la qualité de représentation des individus et des variables. Pour cela, nous affichons ci-dessous les résultats des contributions des individus et des variables aux axes ainsi que leurs cosinus carrés dans le plan.
+
+***Résultats***
+
+```{r,echo=FALSE,results=FALSE,include=F}
+#-------------------------------------
+#Pour commenter les résultats de l'ACP sur la DATA entière
+#-------------------------------------
+
+round(europe.pca$var$contrib,2)
+round(europe.pca$ind$contrib,2)
+
+round(europe.pca$var$cos2,2)
+round(europe.pca$ind$cos2,2)
+```
+
+Les variables contribuant le plus à l'axe 1 sont V9 V16, V17, V18, V4, V11, V3. En effet, leur contribution sont toutes supérieures à 7%. De plus, sur le graphique de l'ACP, on constate que V16, V17, V18 et V11 sont corrélées positivement avec cet axe et V9, V4 et V3 négativement. Ainsi, on en déduit que sur cet axe, les dépenses en matière de practiciens en médécine et de soins à domicile sont opposés aux dépenses en matière de soins curatifs et aux soins de longue durée en milieu hospitalier.
+Donc, les années représentées avec une forte coordonnée sur l'axe 1 seront les années où en moyenne les 14 pays sélecionnés ont plutôt dépensé en matière de gouvernance et administration des systèmes de santé et en matière de practiciens en médecine, alors que les années ayant une faible coordonnée sur l'axe 1 seront les années où les 14 pays sélectionnées ont en moyenne plutôt dépensé en matière de soins curatifs et aux soins de longue durée en milieu hospitalier.
+
+Les variables contribuant le plus à l'axe 2 sont V5, V15, V1 et V12 (elles ont une contribution supérieure à 7%). Sur le graphique de l'ACP, on constate que V1, V15 et V12 ont une corrélation positive avec cet axe, alors que V5 et l'axe 2 son corrélés négativement. On en conclut donc que sur cet axe, les dépenses en matière de soins curatifs amblatoires sont opposées aux dépenses en matière de soins préventifs et de services auxiliaires. 
+Toutes les variables présentent un cosinus carré supérieur à 0,75, excepté V7 dont le cosinus carré vaut 0,51. Donc globalement, les variables présentent toutes une très bonne qualité de représentation sur le plan, nous pouvons donc facilement interpréter leurs résultats sur le plan. 
+
+Nous savons qu'il est souhaitable que les individus contribuent de manière équivalente à l'inertie de chaque axe. Voici ci-dessus les résultats de contributions de chaque année aux axes.
+Les cosinus carrés des années sont globalement tous élevés (supérieurs à 0,7), il sera alors facile d'interpréter leurs résultats dans le plan, excepté pour 2010 et 2011, dont les cosinus carrés valent respectivement 0,42 et 0,55 dans le plan. 
+
+D'après le graphique de l'ACP et les résultats des contributions et des cosinus carrés, nous pouvons penser que les années 2007 à 2009, pour la moyenne des 14 pays européens sélectionnés, sont caractérisées par des dépenses en matière de gouvernance et administration des systèmes de santé et de practiciens en médecine, contrairement aux années 2015 à 2017 qui sont plutôt caractérisées par des dépenses en matière de soins curatifs et de soins de longue durée en milieu hospitalier, de soins préventifs et de services auxiliaires. Les années 2010 à 2014 sont quant à elles représentées par des dépenses en matière de soins curatifs ambulatoires.
+
+On remarque donc 3 groupes d'années : celui pendant la crise (2007 à 2009), celui juste après crise (2010 à 2014), et les années 2015 à 2017. Pour s'assurer de bien diviser correctement nos observations, nous pouvons passer au clustering hiérarchique sur les résultats de cette ACP afin d'analyser les inertie inter et intra groupe.
+
+
+###b. Classification Hierarchique
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+library(factoextra)
+europe.pca.hcpc<- HCPC(europe.pca,nb.clust=0, graph = F,metric="euclidean", method="ward")
+```
+
+***Détection du nombre de cluster - Inertie***
+
+Pour les même raison que précedement, nous indentifions 3 clusters.
+
+```{r,echo=FALSE,results=FALSE,fig.width=8,fig.height=3}
+par(mfrow=c(1,2))
+
+plot.HCPC(europe.pca.hcpc, choice = "bar")
+
+plot(c(3:6),europe.pca.hcpc$call$t$quot,col="#99CCCC",type="b",pch=19,ylab="Ratio des intertie intra groupe",xlab="Nombre de clusters",col.axis="darkblue",col.lab="darkblue")
+points(3,europe.pca.hcpc$call$t$quot[1], col= "#339999", cex = 2, lwd = 1.5)
+```
+
+***Résultats***
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE,fig.width=6.5,fig.height=3,fig.align="center"}
+fviz_dend(europe.pca.hcpc, cex = 0.7,  palette = brewer.pal(n=4, name = "Pastel2"),  rect = TRUE, rect_fill = TRUE,  rect_border = brewer.pal(n=3, name = "Pastel2"),  labels_track_height = 0.8 )
+
+```
+
+Sur le graphiques ci-dessus, on peut distinguer 3 clusters différents, c'est bien le nombre de clusters qui maximise l'inertie inter groupe et minimise l'inertie intra groupe. Regardons maintenant par quelles composantes principales sont caractérisé chaque cluster.
+
+```{r,echo=FALSE}
+#-------------------------------------
+#Pour commenter les résultats du clustering sur l'acp de la data entière
+#-------------------------------------
+
+#data.pca.hcpc$desc.var$quanti
+
+europe.pca.hcpc$desc.axes$quanti
+```
+
+***Conclusions*** : 
+\begin{itemize}
+\item Dans le \textbf{cluster 1}, la moyenne de la dimension 1 est supérieure à celles des autres clusters, et inversement pour la dimension 2. Donc, vu les résultats obtenus lors de l'ACP, on peut dire que les années de ce cluster sont caractériés par des dépenses en matières de soins curatifs et de longue durée en milieu hospitalier, de soins préventifs et de services auxiliaires.
+
+\item Le \textbf{cluster 2} quant à lui est marqué par une moyenne de la dimension 2 plus faible que celles des autres. Par conséquent, les  annnées de ce cluster correspondent à celles où les pays Européens dépensaient plutot pour des soins ambulatoires.
+
+\item La moyenne de la dimensions 1 dans le \textbf{cluster 3} est beaucoup plus élevé que celle des autres groupes d'années. On en déduit donc que les dépenses se concentraient en priorité sur la gouvernance et l'administration des systèmes de santé ainsi que les  practiciens en médecine.
+\end{itemize}
+La présence de ces différents clusters représentants des années particulières met en exerce les conséquences que la crise a pu avoir sur l'économie des différents pays européens sur la période 2007 - 2017. Nous décidons donc d'effectuer une analyse sur 3 années en particulier(2007 - 2012 - 2017) en prenant en compte la totalités des pays et des variables qui nous avons au sein de notre base de données.
+
+
+
+```{r,echo=FALSE,include=F}
+europe.pca.hcpc$desc.ind$para
+```
+
+##1. Classification Hierarchique sur l'ACP – (Sur 3 années)
+
+
+###a. Analyse en composante principale
+
+```{r,echo=FALSE,include=FALSE,fig.align="center"}
+#----------------------------------
+#IL FAUDRAIT POURVOIR AFFICHER 2007 2017 sur l'ACP de DATA
+#----------------------------------
+data3 <-subset(data,data$TIME==2017|data$TIME==2007|data$TIME==2012)
+rownames(data3) = data3$ID
+data3.pca <- PCA(data3[,c(2,4:23)], quali.sup =21 ,ncp=3,scale.unit = T)
+data3.pca.hcpc <- HCPC(data3.pca,graph = F,method="ward")
+```
+
+```{r,echo=FALSE,fig.width=5,fig.height=3.5,fig.align="center"}
+#-------------------------------------
+#Pour commenter les résultats de l'ACP sur la DATA 3 Années
+#-------------------------------------
+plot(1:20,data3.pca$eig[,3],col="#99CCCC",type="b",pch=19,ylab="% de variance expliquée",xlab="Nombre de dimension",col.axis="darkblue",cex.lab=0.7,cex.axis=0.6,col.lab="darkblue") 
+  abline(h=85,col="salmon",lty=2)
+  abline(h=70,col="salmon",lty=2)
+points(3, data3.pca$eig[3,3], col= "#339999", cex = 2, lwd = 1.5)
+```
+
+Suite à l'analyse du graphique ci-contre, nous décidons de garder les trois premières dimensions, qui expliquent environ 70% de la variance. Une représentation des pays Européens durant les années 2007, 2012 & 2017  est donc justifiée et la qualité de représentation ne sera pratiquement pas altérée par la réduction de la dimension de vingt(20) à trois(3).
+
+Analysons à présent les contributions des différentes variables et individus aux axes ansi que leur cosinus carré. En effet, il est très important de passer par cette étape pour savoir ce que réprésentent les axes, et une observation mal projetée dans le plan (c'est-à-dire avec un cosinus carré faible) ne sera pas interprétable.
+
+```{r,echo=FALSE,include=F} 
+#-------------------------------------
+#Pour commenter les résultats de l'ACP sur la DATA entière
+#-------------------------------------
+round(data3.pca$var$contrib,2)
+
+k=1;list=rep(0,2);
+print("Contribution DIM 1")
+for (i in 1:42){
+  if (round(data3.pca$ind$contrib,2)[i,1]>1.7){
+    list[k]<-rownames(data3[i,])
+    k=k+1
+  }
+  }
+list
+k=1;list=rep(0,2);
+print("Contribution DIM 2")
+for (i in 1:42){
+  if (round(data3.pca$ind$contrib,2)[i,2]>1.7){
+    list[k]<-rownames(data3[i,])
+    k=k+1
+  }
+}
+list
+k=1;list=rep(0,2);
+print("Contribution DIM 3")
+for (i in 1:42){
+  if (round(data3.pca$ind$contrib,2)[i,3]>1.7){
+    list[k]<-rownames(data3[i,])
+    k=k+1
+  }
+  }
+list
+```
+
+```{r,echo=FALSE}
+#-------------------------------------
+#Pour commenter les résultats de l'ACP sur la DATA entière
+#-------------------------------------
+#round(data.pca$ind$cos2,2) 
+round(data3.pca$var$cos2,2) 
+
+k=1;list=rep(0,2);
+print("somme des cos2 des observations sur les 3 dimensions")
+for (i in 1:42){
+  if (round(data3.pca$ind$cos2,2)[i,1] + round(data3.pca$ind$cos2,2)[i,2] + round(data3.pca$ind$cos2,2)[i,3] > 0.65){
+    list[k]<-rownames(data3[i,])
+    k=k+1
+  }
+  }
+list
+```
+
+**Contribution des variables** :
+
+On constate que les variables contribuant le plus à la **dimension 1** sont V1, V2, V4, V6, V7, V14, V15, V16. Sur le graphique de l'ACP, on constate également que la première composante principale est corrélée  positivement avec toutes ces variables, et ces corrélations assez proches de 1. Cet axe est donc déterminé par les dépenses en médicaments, en gouvernance et administration des systèmes de santé, en soins curatifs et en santé courante. 
+
+Les variables contribuant le plus à la **dimension 2** sont V3, V27, v28, V30. Celles-ci sont corrélées positivement avec cette deuxième composante principale, exceptée V3. Elle permettra donc de mettre en opposition les quantités de lits d'hopitaux aux dépenses en matières de soins curatifs en mileu hospitalier.
+
+Les variables qui contribuent le plus à la dimension 3 sont V18, V22, V5 et V29. 
+
+**Contribution des individus** :
+
+Les pays tels que l'Allemagne, la Roumanie, l'Autriche, l'Espagne, l'Estonie, la Hongrie, la Lituanie et les Pays-Bas ont un bon $cos^2$ sur toutes les années, ils sont donc bien représentés dans le plan, leur proximité seront donc plus aisément interprétable.
+
+En revanche, les pays restant n'ont pas un bon $cos^2$ pour ces années, il nous sera alors difficile d'interpréter leurs résultats et le faire avec précaution.  
+
+Concernant les variables, celles ayant un $cos^2>0,65$ sont V1, V2, V3, V4, V6, V7, V10, V14, V15, V16, V18, V27, V28 et V30. Nous devrons faire attention lors de l'interprétation de ces  variables ayant un $cos^2<0.5$ car elles sont mal projetées dans le plan. 
+
+**Interprétation** : 
+
+Le graphique confirme nos interprétations faites ci-dessus : 
+
+```{r,echo=FALSE,fig.width=7,fig.height=3.5,fig.align="center"}
+fviz_pca_biplot(data3.pca, repel = TRUE, labelsize =2,col.ind = "#99CCCC", # Couleur des variables 
+col.var = "contrib",  # Couleur des individues
+gradient.cols =  brewer.pal(n=4, name = "Purples"),legend.title = list( color = "Contrib"),title="")
+```
+
+L'**axe 1** isole les dépenses en médicaments, en gouvernance et administration des systèmes de santé, en soins curatifs et en santé courante. En réalité, il oppose l'**Estonie**, la **Hongrie**, la **Roumanie** et la **Lituanie** prise sur les années 2007, 2012 et 2017 aux **Pays-Bas**, à l'**Allemagne** et à l'**Autriche** (toutes prises uniquement sur les années 2012 et 2017) marqués par de forte dépenses dans ces agrégats.
+
+
+Sur **l’axe 2**, on constate que **l'Allemagne** et **l'Autriche** caractérisés par de grandes quantités de lits d'hopitaux sont en opposition aux **Pays-Bas**, au **Portugal** ainsi qu'à **l'Espagne** marqués par des dépenses en termes de soins curatifs. 
+
+Néanmoins, il existe des groupes se détachant de par leur type de dépenses : 
+\begin{itemize}
+\item \textbf{Finlande}, \textbf{France} : caractérisé par beaucoup de dépenses en matières de santé mais sans différenciation particulière dans le choix des agrégats.
+\item \textbf{Belgique} :  beaucoup de dépenses en matières de santé avec une légère préférence pour les soins en tout genre.
+\end{itemize}
+
+Le regroupement ci-dessous nous permet de constater qu'en général:
+\begin{itemize}
+\item Les pays qui en 2007 dépensaient dans les médicaments, les soins curatifs, la santé courante et la gouvernance et administration des systèmes de santé soins curatifs et en santé courante n'ont cessé d'augmenter leur moyens dans ces secteurs.     
+\item L'\textbf{Estonie} à compter de 2012 tend à changer de groupe du fait de l'augmentation de ses dépenses en matières de santé en général et particulièrement celles en soins curatifs. 
+\item La \textbf{Grèce}  qui en 2007 était au centre des pays a considérablement baissé ses dépenses de santé au cours des années qui on suivit la crise financière de 2008.
+\end{itemize}
+
+###b. Classification Hierarchique
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE,fig.width=6.5,fig.height=3,fig.align="center"}
+#Cluster
+fviz_cluster(data3.pca.hcpc,
+             repel = F,   labelsize =5,         
+             show.clust.cent = TRUE, 
+             palette = brewer.pal(n=4, name = "Pastel2"),         
+             ggtheme = theme_minimal(),
+             main = "Factor map"
+             )
+
+```
+
+
+```{r,echo=F,include=F}
+#-------------------------------------
+#Pour commenter les résultats du clustering sur l'acp de la data entière
+#-------------------------------------
+
+#data.pca.hcpc$desc.var$quanti
+
+data3.pca.hcpc$desc.axes$quanti
+#Cluster 1 VERT
+#Cluster 2 ORANGE ses individu ont des coordonnées élevées sur la DIM 1,2,3
+#Cluster 3 BLEU
+#CLuster 4 ROSE
+```
+
+#IV. Conclusions générales
+
+Tout d'abord, contrairement a ce que l'on pourrait croire les différentes régions Nord, Sud, Est et Ouest ne permettent de définir des "groupes" de comportements en matières de dépenses de santé. Ensuite l'étude de la médiane européenne entre les années 2007 et 2017, nous amène à la conclusion qu'il existe 3 grandes étapes dans son évolution au cours de cette période. En effet, les dépenses en matières de santé des années autour de la crise (2007-2009) sont différentes de celles qui suivent la crise. De plus, les indicateurs pricipaux de dépenses durant les années où l'Europe se remettait de la crise (2010-2014) sont différents de ceux à partir de 2015.
+A la question de savoir si  la crise écoomique de 2008 a impacté durablement la répartoition des dépenses au sein de l'Union Européenne, la réponse est par conséquent oui. Cependant il existe un biais dans les résultats de notre étude car ceux-ci se basent uniquement sur les données de 14 pays qui n'étaient pas complètes.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
